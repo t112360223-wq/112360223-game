@@ -1,0 +1,446 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Taiwan Road Rush - Playable</title>
+  <style>
+    * { box-sizing: border-box; }
+    html, body {
+      margin: 0;
+      height: 100%;
+      background: #091b2d;
+      font-family: Arial, Helvetica, sans-serif;
+      color: white;
+    }
+    body {
+      display: grid;
+      place-items: center;
+    }
+    .game-wrap {
+      width: min(92vw, 900px);
+      background: rgba(8, 16, 26, 0.9);
+      border: 3px solid rgba(255,255,255,0.1);
+      border-radius: 18px;
+      overflow: hidden;
+      box-shadow: 0 18px 40px rgba(0,0,0,0.35);
+    }
+    .hud {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 12px 16px;
+      background: rgba(19, 31, 46, 0.9);
+      border-bottom: 2px solid rgba(255,255,255,0.08);
+      font-weight: bold;
+      letter-spacing: 0.04em;
+    }
+    .title { color: #ffd166; }
+    .stats { display: flex; gap: 18px; flex-wrap: wrap; }
+    canvas {
+      display: block;
+      width: 100%;
+      height: auto;
+      background: linear-gradient(#8bd0ff, #dff6ff 40%, #bfecca 100%);
+    }
+    .overlay {
+      position: absolute;
+      left: 50%;
+      top: 50%;
+      transform: translate(-50%, -50%);
+      width: min(80%, 380px);
+      text-align: center;
+      background: rgba(5,14,20,0.75);
+      border: 2px solid rgba(255,255,255,0.12);
+      border-radius: 14px;
+      padding: 18px 16px;
+      box-shadow: 0 12px 30px rgba(0,0,0,0.28);
+      pointer-events: none;
+    }
+    .overlay.hidden { opacity: 0; display: none; }
+    .overlay h2 { margin: 0 0 10px; color: #ffd166; }
+    .overlay p { margin: 0; line-height: 1.5; }
+    .canvas-box { position: relative; }
+  </style>
+</head>
+<body>
+  <div class="game-wrap">
+    <div class="hud">
+      <div class="title">TAIWAN ROAD RUSH</div>
+      <div class="stats">
+        <span id="scoreText">Score: 0</span>
+        <span id="bestText">Best: 0</span>
+        <span id="livesText">Lives: 3</span>
+      </div>
+    </div>
+    <div class="canvas-box">
+      <canvas id="gameCanvas" width="900" height="560"></canvas>
+      <div id="overlay" class="overlay">
+        <h2>Ready?</h2>
+        <p>Use A / D or ← / → to steer.<br>Collect coins, avoid traffic, and survive.</p>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const canvas = document.getElementById('gameCanvas');
+    const ctx = canvas.getContext('2d');
+    const scoreText = document.getElementById('scoreText');
+    const bestText = document.getElementById('bestText');
+    const livesText = document.getElementById('livesText');
+    const overlay = document.getElementById('overlay');
+
+    const road = {
+      x: 215,
+      width: 470,
+      laneCount: 4,
+      laneWidth: 0,
+      speed: 320,
+      scroll: 0
+    };
+
+    road.laneWidth = road.width / road.laneCount;
+
+    const player = {
+      x: 0,
+      y: canvas.height - 100,
+      width: 48,
+      height: 76,
+      speed: 320,
+      color: '#ffbf00',
+      lives: 3,
+      invincible: 0
+    };
+
+    let score = 0;
+    let best = Number(localStorage.getItem('taiwanRoadRushBest') || 0);
+    let running = false;
+    let lastTime = 0;
+    let spawnTimer = 0;
+    let coinTimer = 0;
+    let difficulty = 1;
+
+    const keys = { left: false, right: false };
+    const enemies = [];
+    const coins = [];
+
+    function clamp(value, min, max) {
+      return Math.min(Math.max(value, min), max);
+    }
+
+    function updateHud() {
+      scoreText.textContent = 'Score: ' + Math.floor(score);
+      bestText.textContent = 'Best: ' + best;
+      livesText.textContent = 'Lives: ' + player.lives;
+    }
+
+    function resetPlayer() {
+      player.x = road.x + road.laneWidth * 1.5 - player.width / 2;
+      player.invincible = 1.2;
+    }
+
+    function resetGame() {
+      enemies.length = 0;
+      coins.length = 0;
+      score = 0;
+      player.lives = 3;
+      road.speed = 320;
+      road.scroll = 0;
+      spawnTimer = 0.8;
+      coinTimer = 1.5;
+      difficulty = 1;
+      resetPlayer();
+      updateHud();
+    }
+
+    function getDifficultyLevel() {
+      return 1 + score / 140;
+    }
+
+    function startGame() {
+      if (!running) {
+        running = true;
+        resetGame();
+        overlay.classList.add('hidden');
+      }
+    }
+
+    function endGame() {
+      running = false;
+      best = Math.max(best, Math.floor(score));
+      localStorage.setItem('taiwanRoadRushBest', String(best));
+      updateHud();
+      overlay.classList.remove('hidden');
+      overlay.innerHTML = '<h2>Crash!</h2><p>Final score: ' + Math.floor(score) + '<br>Press any key or click to play again.</p>';
+    }
+
+    function laneCenter(laneIndex) {
+      return road.x + road.laneWidth * laneIndex + road.laneWidth / 2;
+    }
+
+    function spawnEnemy() {
+      const maxEnemies = Math.min(8, 4 + Math.floor(getDifficultyLevel()));
+      if (enemies.length >= maxEnemies) return;
+
+      const spawnCount = Math.random() < Math.min(0.5, (getDifficultyLevel() - 1) * 0.18) ? 2 : 1;
+
+      for (let j = 0; j < spawnCount; j++) {
+        const availableLanes = Array.from({ length: road.laneCount }, (_, i) => i).filter(
+          lane => !enemies.some(enemy => enemy.lane === lane && enemy.y < 120)
+        );
+
+        if (availableLanes.length === 0) continue;
+
+        const lane = availableLanes[Math.floor(Math.random() * availableLanes.length)];
+        const x = laneCenter(lane) - 22;
+        const speed = 240 + Math.random() * 180 + road.speed * 0.18 + (getDifficultyLevel() - 1) * 30;
+
+        const car = {
+          x,
+          y: -90 - j * 100,
+          width: 44,
+          height: 76,
+          speed,
+          lane,
+          color: ['#e63946', '#ffb703', '#48cae4', '#6c757d', '#8ecae6'][Math.floor(Math.random() * 5)]
+        };
+
+        enemies.push(car);
+      }
+    }
+
+    function spawnCoin() {
+      const lane = Math.floor(Math.random() * road.laneCount);
+      const x = laneCenter(lane);
+      const coin = {
+        x,
+        y: -24,
+        radius: 12,
+        speed: 220 + Math.random() * 80,
+        lane
+      };
+      coins.push(coin);
+    }
+
+    function movePlayer() {
+      let dir = 0;
+      if (keys.left) dir -= 1;
+      if (keys.right) dir += 1;
+      player.x += dir * player.speed * (1 / 60);
+      player.x = clamp(player.x, road.x + 10, road.x + road.width - player.width - 10);
+    }
+
+    function updateEnemies(dt) {
+      for (let i = enemies.length - 1; i >= 0; i--) {
+        const enemy = enemies[i];
+        enemy.y += enemy.speed * dt;
+
+        if (enemy.y > canvas.height + 120) {
+          enemies.splice(i, 1);
+          continue;
+        }
+
+        if (rectsOverlap(player, enemy)) {
+          enemies.splice(i, 1);
+          if (player.invincible <= 0) {
+            player.lives -= 1;
+            player.invincible = 1.2;
+            updateHud();
+            if (player.lives <= 0) {
+              endGame();
+              return;
+            }
+          }
+        }
+      }
+    }
+
+    function updateCoins(dt) {
+      for (let i = coins.length - 1; i >= 0; i--) {
+        const coin = coins[i];
+        coin.y += coin.speed * dt;
+
+        if (coin.y > canvas.height + 30) {
+          coins.splice(i, 1);
+          continue;
+        }
+
+        const dx = coin.x - (player.x + player.width / 2);
+        const dy = coin.y - (player.y + player.height / 2);
+        if (Math.hypot(dx, dy) < 34) {
+          coins.splice(i, 1);
+          score += 25;
+          updateHud();
+        }
+      }
+    }
+
+    function rectsOverlap(a, b) {
+      return (
+        a.x < b.x + b.width &&
+        a.x + a.width > b.x &&
+        a.y < b.y + b.height &&
+        a.y + a.height > b.y
+      );
+    }
+
+    function update(deltaTime) {
+      if (!running) return;
+
+      const dt = deltaTime;
+      difficulty = getDifficultyLevel();
+      score += dt * 12;
+      road.speed = 320 + Math.min(score * 2.4, 260);
+      player.invincible = Math.max(0, player.invincible - dt);
+
+      movePlayer();
+      road.scroll += road.speed * dt;
+
+      spawnTimer -= dt;
+      if (spawnTimer <= 0) {
+        spawnEnemy();
+        spawnTimer = Math.max(0.38, 1.2 - difficulty * 0.18);
+      }
+
+      coinTimer -= dt;
+      if (coinTimer <= 0) {
+        spawnCoin();
+        coinTimer = Math.max(0.7, 1.5 - difficulty * 0.12) + Math.random() * 0.8;
+      }
+
+      updateEnemies(dt);
+      updateCoins(dt);
+      updateHud();
+    }
+
+    function drawRoad() {
+      ctx.fillStyle = '#3bbb6b';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+      ctx.fillStyle = '#2e3743';
+      ctx.fillRect(road.x, 0, road.width, canvas.height);
+
+      ctx.fillStyle = '#fbe9a9';
+      for (let i = 0; i < 18; i++) {
+        const y = (i * 80 + (road.scroll * 1.2)) % (canvas.height + 80) - 80;
+        ctx.fillRect(road.x + road.laneWidth - 4, y, 8, 42);
+        ctx.fillRect(road.x + road.laneWidth * 2 - 4, y, 8, 42);
+        ctx.fillRect(road.x + road.laneWidth * 3 - 4, y, 8, 42);
+      }
+
+      ctx.fillStyle = '#f0f0e8';
+      ctx.fillRect(road.x - 18, 0, 18, canvas.height);
+      ctx.fillRect(road.x + road.width, 0, 18, canvas.height);
+
+      for (let i = 0; i < 25; i++) {
+        const y = (i * 70 + road.scroll * 1.7) % (canvas.height + 100) - 100;
+        ctx.fillStyle = '#ffd166';
+        ctx.fillRect(road.x - 12, y, 7, 35);
+        ctx.fillRect(road.x + road.width + 5, y, 7, 35);
+      }
+    }
+
+    function drawCar(x, y, width, height, color) {
+      ctx.fillStyle = color;
+      ctx.fillRect(x, y, width, height);
+
+      ctx.fillStyle = '#1d1d1d';
+      ctx.fillRect(x + 8, y + 10, width - 16, height - 22);
+
+      ctx.fillStyle = '#f3f3f3';
+      ctx.fillRect(x + 7, y + 10, 8, 12);
+      ctx.fillRect(x + width - 15, y + 10, 8, 12);
+      ctx.fillRect(x + 7, y + height - 22, 8, 12);
+      ctx.fillRect(x + width - 15, y + height - 22, 8, 12);
+    }
+
+    function drawCoin(coin) {
+      ctx.save();
+      ctx.translate(coin.x, coin.y);
+      ctx.fillStyle = '#ffd166';
+      ctx.beginPath();
+      ctx.arc(0, 0, coin.radius, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = '#f77f00';
+      ctx.fillRect(-5, -9, 10, 18);
+      ctx.restore();
+    }
+
+    function drawPlayer() {
+      if (player.invincible > 0 && Math.floor(player.invincible * 10) % 2 === 0) {
+        return;
+      }
+      drawCar(player.x, player.y, player.width, player.height, player.color);
+    }
+
+    function drawBackgroundDecor() {
+      ctx.fillStyle = '#b9e7b9';
+      ctx.fillRect(0, 0, canvas.width, 180);
+
+      ctx.fillStyle = '#7ec9a7';
+      ctx.beginPath();
+      ctx.moveTo(0, 180);
+      ctx.lineTo(130, 80);
+      ctx.lineTo(250, 180);
+      ctx.lineTo(420, 90);
+      ctx.lineTo(620, 180);
+      ctx.lineTo(760, 100);
+      ctx.lineTo(900, 180);
+      ctx.lineTo(900, 260);
+      ctx.lineTo(0, 260);
+      ctx.closePath();
+      ctx.fill();
+
+      ctx.fillStyle = '#4db6ac';
+      ctx.fillRect(0, 260, canvas.width, 90);
+    }
+
+    function draw() {
+      drawBackgroundDecor();
+      drawRoad();
+
+      for (const coin of coins) drawCoin(coin);
+      for (const enemy of enemies) drawCar(enemy.x, enemy.y, enemy.width, enemy.height, enemy.color);
+      drawPlayer();
+
+      ctx.fillStyle = '#d62828';
+      ctx.fillRect(18, 18, 170, 52);
+      ctx.fillStyle = '#fff';
+      ctx.font = 'bold 22px Arial';
+      ctx.fillText('TAIWAN', 42, 54);
+    }
+
+    function gameLoop(timestamp) {
+      const deltaTime = Math.min((timestamp - lastTime) / 1000 || 0.016, 0.033);
+      lastTime = timestamp;
+      update(deltaTime);
+      draw();
+      requestAnimationFrame(gameLoop);
+    }
+
+    document.addEventListener('keydown', (event) => {
+      const key = event.key.toLowerCase();
+      if (key === 'a' || key === 'arrowleft') keys.left = true;
+      if (key === 'd' || key === 'arrowright') keys.right = true;
+      if (!running && (key === ' ' || key === 'enter' || key === 'a' || key === 'd' || key === 'arrowleft' || key === 'arrowright')) {
+        startGame();
+      }
+    });
+
+    document.addEventListener('keyup', (event) => {
+      const key = event.key.toLowerCase();
+      if (key === 'a' || key === 'arrowleft') keys.left = false;
+      if (key === 'd' || key === 'arrowright') keys.right = false;
+    });
+
+    canvas.addEventListener('click', () => {
+      if (!running) startGame();
+    });
+
+    updateHud();
+    resetGame();
+    overlay.classList.remove('hidden');
+    requestAnimationFrame(gameLoop);
+  </script>
+</body>
+</html>

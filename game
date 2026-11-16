@@ -1,0 +1,14 @@
+You are a game designer and prompt engineer.
+
+Help me turn my simple game idea into ONE clear English prompt that I can paste into an AI coding tool to generate a
+playable browser game.
+
+My game idea: Taiwan racing
+
+Define these 8 items: game type, gameplay, controls, visual style, environment, characters & obstacles, game rules, and
+technical requirements.
+
+Keep the game beginner-friendly. Require HTML, CSS, and JavaScript, preferably in a single index.html file. No backend,
+no API keys, and no build tools. The game must work on GitHub Pages.
+
+Output ONLY the final game-development prompt, ready to copy and use.
